@@ -59,7 +59,7 @@
       <input type="range" id="fps" min="1" max="30" value="10">
     </div>
     <div class="row actions">
-      <button id="regenBtn" disabled>Regenerate Moveset</button>
+      <button id="regenBtn" disabled>Loading zstd library…</button>
     </div>
   </section>
 
@@ -86,8 +86,8 @@
         <option value="json">JSON (readable)</option>
       </select>
     </div>
-    <div class="row" id="serverStatus" style="margin-bottom:0.5rem;font-size:0.85rem;color:#66fcb1;">
-      Connecting to server…
+    <div class="row" id="zstdStatus" style="margin-bottom:0.5rem;font-size:0.85rem;color:#66fcb1;">
+      Loading zstd library…
     </div>
     <textarea id="output" readonly placeholder="Generate a moveset to see the code here..."></textarea>
     <div class="row actions">
@@ -106,6 +106,9 @@
   <p>
     <strong>Disclaimer:</strong> This generates JJS Skill Builder import codes (base64 → zstd → JSON).
     Codes may break after JJS game updates. Import via: Private Server → Free Build → Place Character Block → Configure → Import/Clipboard → paste code.
+  </p>
+  <p>
+    Fully client-side — works on <strong>Cloudflare Pages, GitHub Pages, or any static host</strong>. No backend required.
   </p>
 </footer>
 
