@@ -224,7 +224,7 @@ async function withCodec(fn) {
 
 async function zstdCompress(data, level) {
   return withCodec((zstd) => {
-    const codec = zstd.Simple();
+    const codec = new zstd.Simple();
     try {
       const input = typeof data === 'string' ? new TextEncoder().encode(data) : data;
       const compressed = codec.compress(input, level);
@@ -237,7 +237,7 @@ async function zstdCompress(data, level) {
 
 async function zstdDecompress(data) {
   return withCodec((zstd) => {
-    const codec = zstd.Simple();
+    const codec = new zstd.Simple();
     try {
       return codec.decompress(data);
     } finally {
