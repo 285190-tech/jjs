@@ -18,6 +18,8 @@ const colorModeInput = document.getElementById('colorMode');
 const singleColorRow = document.getElementById('singleColorRow');
 const singleColorInput = document.getElementById('singleColor');
 const moveTypeInput = document.getElementById('moveType');
+const effectTypeInput = document.getElementById('effectType');
+const effectTypeRow = document.getElementById('effectTypeRow');
 const durationInput = document.getElementById('duration');
 const fpsInput = document.getElementById('fps');
 const videoSettingsRow = document.getElementById('videoSettingsRow');
@@ -75,7 +77,11 @@ fpsInput.addEventListener('input', () => {
 });
 
 moveTypeInput.addEventListener('change', () => {
-  // No special UI needed for move type change
+  if (moveTypeInput.value === 'particle') {
+    effectTypeRow.style.display = 'flex';
+  } else {
+    effectTypeRow.style.display = 'none';
+  }
 });
 
 colorModeInput.addEventListener('change', () => {
@@ -408,7 +414,8 @@ async function generateMoveset() {
     blockCountEl.textContent = `Blocks: ${blocks.length}`;
 
     const moveType = moveTypeInput.value;
-    const moveset = buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration, moveType);
+    const effectType = effectTypeInput ? effectTypeInput.value : 'Particle';
+    const moveset = buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration, moveType, effectType);
 
     const json = JSON.stringify(moveset, null, 2);
     const code = await encodeCode(moveset.slots);
@@ -593,7 +600,7 @@ function drawBlockPreview(blocks, blockSize, gap, totalTime) {
 
 // ---- Build JJS slot structure ----
 
-function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration, moveType) {
+function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration, moveType, effectType) {
   const slots = [];
 
   const timeGroups = new Map();
@@ -612,7 +619,7 @@ function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleC
       if (moveType === 'particle') {
         line.push({
           K_NAME: 'VISUAL',
-          EFFECT: 'Particle',
+          EFFECT: effectType,
           COLOR: b.color.replace('rgb(', '').replace(')', ''),
           SIZE: `${blockSize}, ${blockSize}, ${blockSize}`,
           POSITION: `${b.x.toFixed(3)}, ${b.y.toFixed(3)}, 0`,
@@ -671,6 +678,7 @@ function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleC
       duration,
       fps: mediaType === 'video' ? parseInt(fpsInput.value, 10) : null,
       moveType,
+      effectType,
     },
   };
 }
