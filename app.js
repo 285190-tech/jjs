@@ -50,6 +50,7 @@ let blocks = [];         // flattened block list with time stamps
 let zstdReady = false;
 let getZstdCodec = null; // Promise that resolves to the codec object
 let isGenerating = false;
+let zstdLoadTimeout = null;
 
 // ---- UI wiring ----
 
@@ -123,21 +124,28 @@ function setGenerating(gen) {
   regenBtn.textContent = gen ? 'Generating…' : 'Regenerate Moveset';
   copyBtn.disabled = gen || !output.value;
   downloadBtn.disabled = gen || !output.value;
+  // Update button title to explain why it's disabled
+  if (!gen) {
+    if (!media) regenBtn.title = 'Upload an image or video first';
+    else if (!zstdReady) regenBtn.title = 'zstd library still loading…';
+    else regenBtn.title = '';
+  }
 }
 
 // ---- zstd library loading ----
 
 function updateZstdStatus(ready, message, progress) {
   zstdReady = ready;
-  if (progress !== undefined) {
+  if (progress !== undefined && progress !== null) {
     zstdProgressRow.style.display = 'block';
     zstdProgress.style.width = progress + '%';
-    if (zstdProgressText) zstdProgressText.textContent = message;
+    if (zstdProgressText) zstdProgressText.textContent = message || '';
   }
   if (ready) {
     zstdStatus.textContent = 'zstd ready — generating real JJS import codes.';
     zstdStatus.style.color = '#00ff9d';
     zstdProgressRow.style.display = 'none';
+    if (zstdLoadTimeout) { clearTimeout(zstdLoadTimeout); zstdLoadTimeout = null; }
     regenBtn.disabled = false;
     regenBtn.textContent = 'Regenerate Moveset';
     if (media) generateMoveset();
@@ -149,52 +157,57 @@ function updateZstdStatus(ready, message, progress) {
   }
 }
 
-async function loadZstdLibrary() {
-  const tryInit = () => {
-    if (typeof window.ZstdCodec !== 'undefined' && typeof window.ZstdCodec.ZstdCodec?.run === 'function') {
-      getZstdCodec = new Promise((resolve, reject) => {
-        window.ZstdCodec.ZstdCodec.run((zstd) => {
-          resolve(zstd);
-          updateZstdStatus(true, null, 100);
-        });
-      });
-      return true;
-    }
-    return false;
-  };
-
-  if (tryInit()) return;
-
-  // Fallback: try loading from local bundle
-  zstdProgressRow.style.display = 'block';
-  try {
+function loadZstdBundle() {
+  return new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = 'js/zstd-codec.bundle.js';
-    script.onload = () => {
-      setTimeout(() => {
-        if (!tryInit()) {
-          updateZstdStatus(false, 'zstd library loaded but API not found', 100);
-        }
-      }, 500);
-    };
-    script.onerror = () => {
-      updateZstdStatus(false, 'Failed to load zstd library. Check that js/zstd-codec.bundle.js exists.', 100);
-    };
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load zstd bundle script'));
     document.head.appendChild(script);
+  });
+}
 
-    // Simulate progress while loading (real progress isn't available from script tag)
-    let p = 0;
-    const iv = setInterval(() => {
-      p += 5;
-      if (p >= 90 || zstdReady) {
-        clearInterval(iv);
-        if (!zstdReady) zstdProgress.style.width = '90%';
-      } else {
-        zstdProgress.style.width = p + '%';
-        if (zstdProgressText) zstdProgressText.textContent = 'Loading zstd library… ' + p + '%';
+async function loadZstdLibrary() {
+  zstdProgressRow.style.display = 'block';
+
+  // Simulate progress while the 6MB bundle loads
+  let p = 0;
+  const iv = setInterval(() => {
+    p += 3;
+    if (p >= 85) clearInterval(iv);
+    zstdProgress.style.width = p + '%';
+    if (zstdProgressText) zstdProgressText.textContent = 'Loading zstd library… ' + p + '%';
+  }, 100);
+
+  // Timeout after 20 seconds
+  zstdLoadTimeout = setTimeout(() => {
+    clearInterval(iv);
+    updateZstdStatus(false, 'zstd library failed to load within 20 seconds. Try refreshing the page.', 100);
+  }, 20000);
+
+  try {
+    await loadZstdBundle();
+    clearInterval(iv);
+
+    const tryInit = () => {
+      if (typeof window.ZstdCodec !== 'undefined' && typeof window.ZstdCodec.ZstdCodec?.run === 'function') {
+        getZstdCodec = new Promise((resolve) => {
+          window.ZstdCodec.ZstdCodec.run((zstd) => {
+            resolve(zstd);
+            updateZstdStatus(true, null, 100);
+          });
+        });
+        return true;
       }
-    }, 100);
+      return false;
+    };
+
+    if (!tryInit()) {
+      updateZstdStatus(false, 'zstd library loaded but API not found', 100);
+      return;
+    }
   } catch (e) {
+    clearInterval(iv);
     updateZstdStatus(false, 'Failed to load zstd library: ' + e.message, 100);
   }
 }
@@ -304,6 +317,7 @@ function handleMediaSelect(e) {
       media = vid;
       mediaInfoEl.textContent = `Video: ${vid.videoWidth}×${vid.videoHeight}, ${vid.duration.toFixed(2)}s`;
       drawOriginalFrame(0);
+      setGenerating(false); // refresh button state
       if (zstdReady) {
         regenBtn.disabled = false;
         generateMoveset();
@@ -320,6 +334,7 @@ function handleMediaSelect(e) {
       mediaInfoEl.textContent = `Image: ${img.width}×${img.height}`;
       drawOriginal();
       URL.revokeObjectURL(url);
+      setGenerating(false); // refresh button state
       if (zstdReady) {
         regenBtn.disabled = false;
         generateMoveset();
@@ -680,7 +695,7 @@ async function decodeExistingCode() {
   if (!code) return;
 
   if (!zstdReady) {
-    showError('zstd library not ready yet. Please wait a moment.');
+    showError('zstd library not ready yet. Please wait for it to finish loading.');
     return;
   }
 
