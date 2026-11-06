@@ -40,12 +40,13 @@ const zstdProgress = document.getElementById('zstdProgress');
 const zstdProgressText = document.getElementById('zstdProgressText');
 const errorMsg = document.getElementById('errorMsg');
 
-const resVal = document.getElementById('resVal');
-const sizeVal = document.getElementById('sizeVal');
-const gapVal = document.getElementById('gapVal');
-const threshVal = document.getElementById('threshVal');
-const durVal = document.getElementById('durVal');
-const fpsVal = document.getElementById('fpsVal');
+const resNum = document.getElementById('resNum');
+const sizeNum = document.getElementById('sizeNum');
+const gapNum = document.getElementById('gapNum');
+const threshNum = document.getElementById('threshNum');
+const durNum = document.getElementById('durNum');
+const fpsNum = document.getElementById('fpsNum');
+const videoPreview = document.getElementById('videoPreview');
 
 let media = null;        // HTMLImageElement or HTMLVideoElement
 let mediaType = null;    // 'image' or 'video'
@@ -57,24 +58,34 @@ let zstdLoadTimeout = null;
 
 // ---- UI wiring ----
 
-resolutionInput.addEventListener('input', () => {
-  resVal.textContent = resolutionInput.value;
-});
-blockSizeInput.addEventListener('input', () => {
-  sizeVal.textContent = blockSizeInput.value;
-});
-gapInput.addEventListener('input', () => {
-  gapVal.textContent = gapInput.value;
-});
-thresholdInput.addEventListener('input', () => {
-  threshVal.textContent = thresholdInput.value;
-});
-durationInput.addEventListener('input', () => {
-  durVal.textContent = durationInput.value;
-});
-fpsInput.addEventListener('input', () => {
-  fpsVal.textContent = fpsInput.value;
-});
+function bindSliderNum(sliderId, numId) {
+  const slider = document.getElementById(sliderId);
+  const num = document.getElementById(numId);
+  slider.addEventListener('input', () => {
+    num.value = slider.value;
+  });
+  num.addEventListener('input', () => {
+    slider.value = num.value;
+  });
+  num.addEventListener('change', () => {
+    // Clamp to min/max on change
+    const min = parseFloat(num.min) || 0;
+    const max = parseFloat(num.max) || 100;
+    let v = parseFloat(num.value);
+    if (isNaN(v)) v = min;
+    if (v < min) v = min;
+    if (v > max) v = max;
+    num.value = v;
+    slider.value = v;
+  });
+}
+
+bindSliderNum('resolution', 'resNum');
+bindSliderNum('blockSize', 'sizeNum');
+bindSliderNum('gap', 'gapNum');
+bindSliderNum('threshold', 'threshNum');
+bindSliderNum('duration', 'durNum');
+bindSliderNum('fps', 'fpsNum');
 
 moveTypeInput.addEventListener('change', () => {
   if (moveTypeInput.value === 'particle') {
@@ -328,6 +339,10 @@ function handleMediaSelect(e) {
       media = vid;
       mediaInfoEl.textContent = `Video: ${vid.videoWidth}×${vid.videoHeight}, ${vid.duration.toFixed(2)}s`;
       drawOriginalFrame(0);
+      // Show the actual video element for preview
+      videoPreview.src = url;
+      videoPreview.style.display = 'block';
+      origCanvas.style.display = 'none';
       setGenerating(false); // refresh button state
       if (zstdReady) {
         regenBtn.disabled = false;
@@ -344,6 +359,9 @@ function handleMediaSelect(e) {
       media = img;
       mediaInfoEl.textContent = `Image: ${img.width}×${img.height}`;
       drawOriginal();
+      // Hide video preview, show canvas
+      videoPreview.style.display = 'none';
+      origCanvas.style.display = 'block';
       URL.revokeObjectURL(url);
       setGenerating(false); // refresh button state
       if (zstdReady) {
