@@ -1,24 +1,28 @@
 /**
- * jjs — Image to JJS custom moveset converter
+ * jjs — Image/Video to JJS custom moveset converter
  *
- * Frontend: image upload, particle-grid generation, preview.
+ * Frontend: media upload, particle-grid generation, preview.
  * Backend (Node.js): zstd encode/decode for real JJS Skill Builder import codes.
  *
  * Import in-game: Private Server → Free Build → Place Character Block →
  * Configure → Import/Clipboard → paste code.
  */
 
-const imageInput = document.getElementById('imageInput');
+const mediaInput = document.getElementById('mediaInput');
 const resolutionInput = document.getElementById('resolution');
 const particleSizeInput = document.getElementById('particleSize');
 const thresholdInput = document.getElementById('threshold');
 const colorModeInput = document.getElementById('colorMode');
 const singleColorRow = document.getElementById('singleColorRow');
 const singleColorInput = document.getElementById('singleColor');
+const durationInput = document.getElementById('duration');
+const fpsInput = document.getElementById('fps');
+const videoSettingsRow = document.getElementById('videoSettingsRow');
 const regenBtn = document.getElementById('regenBtn');
 const origCanvas = document.getElementById('origCanvas');
 const particleCanvas = document.getElementById('particleCanvas');
 const particleCountEl = document.getElementById('particleCount');
+const mediaInfoEl = document.getElementById('mediaInfo');
 const exportFormat = document.getElementById('exportFormat');
 const output = document.getElementById('output');
 const copyBtn = document.getElementById('copyBtn');
@@ -30,9 +34,12 @@ const serverStatus = document.getElementById('serverStatus');
 const resVal = document.getElementById('resVal');
 const sizeVal = document.getElementById('sizeVal');
 const threshVal = document.getElementById('threshVal');
+const durVal = document.getElementById('durVal');
+const fpsVal = document.getElementById('fpsVal');
 
-let img = null;
-let particles = [];
+let media = null;        // HTMLImageElement or HTMLVideoElement
+let mediaType = null;    // 'image' or 'video'
+let particles = [];      // flattened particle list with time stamps
 let serverReady = false;
 
 // ---- UI wiring ----
@@ -46,6 +53,12 @@ particleSizeInput.addEventListener('input', () => {
 thresholdInput.addEventListener('input', () => {
   threshVal.textContent = thresholdInput.value;
 });
+durationInput.addEventListener('input', () => {
+  durVal.textContent = durationInput.value;
+});
+fpsInput.addEventListener('input', () => {
+  fpsVal.textContent = fpsInput.value;
+});
 
 colorModeInput.addEventListener('change', () => {
   if (colorModeInput.value === 'single') {
@@ -55,7 +68,7 @@ colorModeInput.addEventListener('change', () => {
   }
 });
 
-imageInput.addEventListener('change', handleFileSelect);
+mediaInput.addEventListener('change', handleMediaSelect);
 regenBtn.addEventListener('click', generateMoveset);
 copyBtn.addEventListener('click', copyOutput);
 downloadBtn.addEventListener('click', downloadOutput);
@@ -91,17 +104,16 @@ exportFormat.addEventListener('change', async () => {
 
 async function checkServer() {
   try {
-    const res = await fetch('/api/decode', {
+    await fetch('/api/decode', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: 'KLUv/SC2XQQAMkgbGVBZBzBSojMUqD' }),
     });
-    // Even a 400 means the server is up
     serverReady = true;
     serverStatus.textContent = 'Server ready — generating real JJS import codes.';
     serverStatus.style.color = '#00ff9d';
     regenBtn.disabled = false;
-    if (img) generateMoveset();
+    if (media) generateMoveset();
   } catch (e) {
     serverReady = false;
     serverStatus.textContent = 'Server not available — codes will not generate.';
@@ -111,23 +123,58 @@ async function checkServer() {
 }
 checkServer();
 
-// ---- File handling ----
+// ---- Media handling ----
 
-function handleFileSelect(e) {
+function handleMediaSelect(e) {
   const file = e.target.files[0];
   if (!file) return;
 
   const url = URL.createObjectURL(file);
-  img = new Image();
-  img.onload = () => {
-    URL.revokeObjectURL(url);
-    drawOriginal();
-    if (serverReady) {
-      regenBtn.disabled = false;
-      generateMoveset();
-    }
-  };
-  img.src = url;
+  const isVideo = file.type.startsWith('video/');
+  mediaType = isVideo ? 'video' : 'image';
+
+  // Show/hide video-specific settings
+  if (isVideo) {
+    videoSettingsRow.style.display = 'block';
+  } else {
+    videoSettingsRow.style.display = 'none';
+  }
+
+  if (isVideo) {
+    const vid = document.createElement('video');
+    vid.preload = 'metadata';
+    vid.src = url;
+    vid.onloadedmetadata = () => {
+      media = vid;
+      mediaInfoEl.textContent = `Video: ${vid.videoWidth}×${vid.videoHeight}, ${vid.duration.toFixed(2)}s`;
+      drawOriginalFrame(0);
+      if (serverReady) {
+        regenBtn.disabled = false;
+        generateMoveset();
+      }
+    };
+    vid.onerror = () => {
+      alert('Failed to load video file.');
+      URL.revokeObjectURL(url);
+    };
+  } else {
+    const img = new Image();
+    img.onload = () => {
+      media = img;
+      mediaInfoEl.textContent = `Image: ${img.width}×${img.height}`;
+      drawOriginal();
+      URL.revokeObjectURL(url);
+      if (serverReady) {
+        regenBtn.disabled = false;
+        generateMoveset();
+      }
+    };
+    img.onerror = () => {
+      alert('Failed to load image file.');
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  }
 }
 
 function drawOriginal() {
@@ -135,29 +182,52 @@ function drawOriginal() {
   const ctx = canvas.getContext('2d');
 
   const maxDisp = 400;
-  const scale = Math.min(maxDisp / img.width, maxDisp / img.height, 1);
-  canvas.width = img.width * scale;
-  canvas.height = img.height * scale;
+  const scale = Math.min(maxDisp / media.width, maxDisp / media.height, 1);
+  canvas.width = media.width * scale;
+  canvas.height = media.height * scale;
 
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  ctx.drawImage(media, 0, 0, canvas.width, canvas.height);
+}
+
+function drawOriginalFrame(time) {
+  const canvas = origCanvas;
+  const ctx = canvas.getContext('2d');
+  const vid = media;
+
+  // Seek to the frame
+  vid.currentTime = time;
+  vid.onseeked = () => {
+    const maxDisp = 400;
+    const scale = Math.min(maxDisp / vid.videoWidth, maxDisp / vid.videoHeight, 1);
+    canvas.width = vid.videoWidth * scale;
+    canvas.height = vid.videoHeight * scale;
+    ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+  };
 }
 
 // ---- Core conversion ----
 
 async function generateMoveset() {
-  if (!img || !serverReady) return;
+  if (!media || !serverReady) return;
 
   const res = parseInt(resolutionInput.value, 10);
   const particleSize = parseInt(particleSizeInput.value, 10);
   const threshold = parseInt(thresholdInput.value, 10);
   const colorMode = colorModeInput.value;
   const singleColor = singleColorInput.value;
+  const duration = parseFloat(durationInput.value);
+  const fps = parseInt(fpsInput.value, 10);
 
-  particles = sampleImageToParticles(img, res, threshold, colorMode, singleColor);
-  drawParticlePreview(particles, particleSize);
+  if (mediaType === 'image') {
+    particles = sampleImageToParticles(media, res, threshold, colorMode, singleColor, duration);
+  } else {
+    particles = await sampleVideoToParticles(media, res, threshold, colorMode, singleColor, duration, fps);
+  }
+
+  drawParticlePreview(particles, particleSize, mediaType === 'video' ? media.duration : duration);
   particleCountEl.textContent = `Particles: ${particles.length}`;
 
-  const moveset = buildMoveset(particles, res, particleSize, threshold, colorMode, singleColor);
+  const moveset = buildMoveset(particles, res, particleSize, threshold, colorMode, singleColor, mediaType, duration);
 
   const json = JSON.stringify(moveset, null, 2);
   const codeRes = await fetch('/api/encode', {
@@ -171,7 +241,7 @@ async function generateMoveset() {
   output.value = exportFormat.value === 'code' ? code : json;
 }
 
-function sampleImageToParticles(image, res, threshold, colorMode, singleColor) {
+function sampleImageToParticles(image, res, threshold, colorMode, singleColor, duration) {
   const off = document.createElement('canvas');
   off.width = image.width;
   off.height = image.height;
@@ -209,8 +279,6 @@ function sampleImageToParticles(image, res, threshold, colorMode, singleColor) {
         color = `rgb(${r},${g},${b})`;
       }
 
-      const brightness = (r + g + b) / 3;
-
       particles.push({
         id: `${gx},${gy}`,
         x: gx / (res - 1),
@@ -218,10 +286,7 @@ function sampleImageToParticles(image, res, threshold, colorMode, singleColor) {
         color,
         size: particleSize,
         opacity: a / 255,
-        brightness,
-        skillSlot: null,
-        animation: null,
-        hitbox: null,
+        time: duration,   // all particles appear at once
       });
     }
   }
@@ -229,7 +294,91 @@ function sampleImageToParticles(image, res, threshold, colorMode, singleColor) {
   return particles;
 }
 
-function drawParticlePreview(particles, particleSize) {
+async function sampleVideoToParticles(video, res, threshold, colorMode, singleColor, duration, fps) {
+  const particles = [];
+  const vid = video;
+
+  // Clamp duration to video length
+  const effectiveDuration = Math.min(duration, vid.duration);
+  const frameInterval = 1.0 / fps;
+  const numFrames = Math.ceil(effectiveDuration / frameInterval);
+
+  const off = document.createElement('canvas');
+  off.width = res;
+  off.height = res;
+  const octx = off.getContext('2d');
+
+  for (let f = 0; f < numFrames; f++) {
+    const t = f * frameInterval;
+    if (t > effectiveDuration) break;
+
+    // Seek video to this timestamp
+    await seekAndDrawFrame(vid, t, off, octx, res, res);
+
+    const imageData = octx.getImageData(0, 0, res, res);
+    const data = imageData.data;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const a = data[i + 3];
+
+      if (a < threshold) continue;
+
+      const gx = ((i / 4) % res) / (res - 1);
+      const gy = Math.floor((i / 4) / res) / (res - 1);
+
+      let color;
+      if (colorMode === 'single') {
+        color = singleColor;
+      } else if (colorMode === 'grayscale') {
+        const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+        color = `rgb(${gray},${gray},${gray})`;
+      } else {
+        color = `rgb(${r},${g},${b})`;
+      }
+
+      particles.push({
+        id: `${gx.toFixed(3)},${gy.toFixed(3)},${t.toFixed(3)}`,
+        x: gx,
+        y: gy,
+        color,
+        size: particleSize,
+        opacity: a / 255,
+        time: t,   // when this particle appears in the moveset
+      });
+    }
+  }
+
+  return particles;
+}
+
+function seekAndDrawFrame(video, time, canvas, ctx, width, height) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const onSeeked = () => {
+      if (resolved) return;
+      resolved = true;
+      video.removeEventListener('seeked', onSeeked);
+      ctx.drawImage(video, 0, 0, width, height);
+      resolve();
+    };
+    video.addEventListener('seeked', onSeeked, { once: true });
+    video.currentTime = time;
+    // Fallback if seeked doesn't fire
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        video.removeEventListener('seeked', onSeeked);
+        ctx.drawImage(video, 0, 0, width, height);
+        resolve();
+      }
+    }, 100);
+  });
+}
+
+function drawParticlePreview(particles, particleSize, totalTime) {
   const canvas = particleCanvas;
   const ctx = canvas.getContext('2d');
 
@@ -241,7 +390,13 @@ function drawParticlePreview(particles, particleSize) {
   ctx.fillStyle = '#0b0c10';
   ctx.fillRect(0, 0, size, size);
 
+  // If video, show particles at the midpoint time for preview
+  const previewTime = totalTime / 2;
+
   particles.forEach(p => {
+    // For preview, only show particles near the midpoint time
+    if (mediaType === 'video' && Math.abs(p.time - previewTime) > 0.5) return;
+
     const px = Math.round(p.x * (size - particleSize));
     const py = Math.round(p.y * (size - particleSize));
 
@@ -254,25 +409,43 @@ function drawParticlePreview(particles, particleSize) {
 
 // ---- Build JJS slot structure ----
 
-function buildMoveset(particles, res, particleSize, threshold, colorMode, singleColor) {
+function buildMoveset(particles, res, particleSize, threshold, colorMode, singleColor, mediaType, duration) {
   const slots = [];
 
-  // Main skill slot — each particle becomes a hitbox entry
-  const line = particles.map(p => ({
-    K_NAME: 'HITBOX',
-    PREVIEW: [0, 0.1],
-    DAMAGE: 1,
-    STUN_ANIM: true,
-    HIT_USER: false,
-    BLOCKABLE: false,
-    SINGLE_TARGET: false,
-    SIZE: `${p.size}, ${p.size}, ${p.size}`,
-    COLOR: p.color.replace('rgb(', '').replace(')', ''),
-    POSITION: `${p.x.toFixed(3)}, ${p.y.toFixed(3)}, 0`,
-    ROTATION: '0, 0, 0',
-    TIME: 0.1,
-  }));
+  // Group particles by time for video, or all at once for image
+  const timeGroups = new Map();
+  particles.forEach(p => {
+    const key = p.time.toFixed(3);
+    if (!timeGroups.has(key)) timeGroups.set(key, []);
+    timeGroups.get(key).push(p);
+  });
 
+  // Build Line array with hitbox events at each timestamp
+  const line = [];
+  let eventId = 0;
+
+  timeGroups.forEach((group, timeKey) => {
+    const time = parseFloat(timeKey);
+    group.forEach(p => {
+      line.push({
+        K_NAME: 'HITBOX',
+        PREVIEW: [0, 0.1],
+        DAMAGE: 1,
+        STUN_ANIM: true,
+        HIT_USER: false,
+        BLOCKABLE: false,
+        SINGLE_TARGET: false,
+        SIZE: `${p.size}, ${p.size}, ${p.size}`,
+        COLOR: p.color.replace('rgb(', '').replace(')', ''),
+        POSITION: `${p.x.toFixed(3)}, ${p.y.toFixed(3)}, 0`,
+        ROTATION: '0, 0, 0',
+        TIME: Math.round(time * 1000) / 1000,
+        ID: `p${eventId++}`,
+      });
+    });
+  });
+
+  // Main skill slot
   slots.push({
     DATA: {
       Req: [],
@@ -280,44 +453,18 @@ function buildMoveset(particles, res, particleSize, threshold, colorMode, single
       Prop: [],
       Branch: null,
     },
-    NAME: 'Image Moveset',
+    NAME: mediaType === 'video' ? 'Video Moveset' : 'Image Moveset',
     K_NAME: 'SKILL',
     KEY: 1,
-    TOOL_TIP: 'Particle moveset generated from image',
-    COOLDOWN: 5,
-  });
-
-  // Visual slots for every 4th particle
-  particles.forEach((p, i) => {
-    if (i % 4 === 0) {
-      slots.push({
-        DATA: {
-          Req: [],
-          Line: [{
-            K_NAME: 'VISUAL',
-            EFFECT: 'Particle',
-            COLOR: p.color.replace('rgb(', '').replace(')', ''),
-            SIZE: `${p.size * 2}, ${p.size * 2}, ${p.size * 2}`,
-            POSITION: `${p.x.toFixed(3)}, ${p.y.toFixed(3)}, 0`,
-            ROTATION: '0, 0, 0',
-            TIME: 0.3,
-            OPACITY: p.opacity,
-          }],
-          Prop: [],
-          Branch: null,
-        },
-        NAME: `Particle ${i}`,
-        K_NAME: 'SKILL',
-        KEY: 2,
-        TOOL_TIP: 'Visual effect',
-        COOLDOWN: 0,
-      });
-    }
+    TOOL_TIP: `${mediaType} moveset generated from media`,
+    COOLDOWN: mediaType === 'video' ? Math.ceil(duration) : 5,
   });
 
   return {
-    name: 'image-moveset',
+    name: `${mediaType}-moveset`,
     base: 'custom',
+    mediaType,
+    duration,
     slots,
     settings: {
       resolution: res,
@@ -325,6 +472,8 @@ function buildMoveset(particles, res, particleSize, threshold, colorMode, single
       threshold,
       colorMode,
       singleColor,
+      duration,
+      fps: mediaType === 'video' ? parseInt(fpsInput.value, 10) : null,
     },
   };
 }
