@@ -1,9 +1,9 @@
 /**
  * jjs — Image/Video to JJS custom moveset converter
  *
- * Fully client-side. Loads a zstd library from CDN and does all
- * encode/decode in the browser — no backend required. Works on
- * Cloudflare Pages, GitHub Pages, or any static host.
+ * Fully client-side. Uses a bundled zstd-codec library for encode/decode
+ * in the browser — no backend required. Works on Cloudflare Pages,
+ * GitHub Pages, or any static host.
  *
  * Import in-game: Private Server → Free Build → Place Character Block →
  * Configure → Import/Clipboard → paste code.
@@ -44,7 +44,7 @@ let media = null;        // HTMLImageElement or HTMLVideoElement
 let mediaType = null;    // 'image' or 'video'
 let blocks = [];         // flattened block list with time stamps
 let zstdReady = false;
-let zstdLib = null;
+let getZstdCodec = null; // Promise that resolves to the codec object
 
 // ---- UI wiring ----
 
@@ -117,42 +117,38 @@ function updateZstdStatus(ready, message) {
 }
 
 async function loadZstdLibrary() {
-  // If already loaded, nothing to do
-  if (typeof ZstdCodec !== 'undefined') {
-    zstdLib = ZstdCodec;
+  // The bundled library exposes window.ZstdCodec.ZstdCodec.run(callback)
+  if (typeof window.ZstdCodec !== 'undefined' && typeof window.ZstdCodec.ZstdCodec?.run === 'function') {
+    getZstdCodec = new Promise((resolve) => {
+      window.ZstdCodec.ZstdCodec.run((zstd) => resolve(zstd));
+    });
     updateZstdStatus(true);
     return;
   }
 
-  return new Promise((resolve) => {
+  // Fallback: try loading from local bundle
+  try {
     const script = document.createElement('script');
-    script.src = 'https://unpkg.com/zstd-codec@latest/dist/zstd-codec.min.js';
+    script.src = 'js/zstd-codec.bundle.js';
     script.onload = () => {
-      // Give the WASM a moment to initialize
       setTimeout(() => {
-        if (typeof ZstdCodec !== 'undefined') {
-          zstdLib = ZstdCodec;
+        if (typeof window.ZstdCodec !== 'undefined' && typeof window.ZstdCodec.ZstdCodec?.run === 'function') {
+          getZstdCodec = new Promise((resolve) => {
+            window.ZstdCodec.ZstdCodec.run((zstd) => resolve(zstd));
+          });
           updateZstdStatus(true);
         } else {
           updateZstdStatus(false, 'zstd library loaded but API not found');
         }
-        resolve();
       }, 500);
     };
     script.onerror = () => {
-      updateZstdStatus(false, 'Failed to load zstd library from CDN. Check your internet connection.');
-      resolve();
+      updateZstdStatus(false, 'Failed to load zstd library. Check that js/zstd-codec.bundle.js exists.');
     };
     document.head.appendChild(script);
-
-    // Timeout fallback
-    setTimeout(() => {
-      if (!zstdReady && typeof ZstdCodec === 'undefined') {
-        updateZstdStatus(false, 'zstd library failed to load (timeout).');
-        resolve();
-      }
-    }, 5000);
-  });
+  } catch (e) {
+    updateZstdStatus(false, 'Failed to load zstd library: ' + e.message);
+  }
 }
 
 // Initialize zstd on page load
@@ -160,40 +156,33 @@ loadZstdLibrary();
 
 // ---- zstd encode/decode ----
 
-async function zstdCompress(data, level) {
-  if (!zstdLib) throw new Error('zstd library not loaded');
+async function withCodec(fn) {
+  const zstd = await getZstdCodec;
+  return fn(zstd);
+}
 
-  try {
-    // Try ZstdCodec.Simple API
-    const codec = await zstdLib.Simple();
-    const input = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-    const compressed = codec.compress(input, level);
-    codec.delete ? codec.delete() : null;
-    return compressed;
-  } catch (e) {
-    // Fallback: try direct compress on the lib object
-    if (typeof zstdLib.compress === 'function') {
+async function zstdCompress(data, level) {
+  return withCodec((zstd) => {
+    const codec = zstd.Simple();
+    try {
       const input = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-      return zstdLib.compress(input, level);
+      const compressed = codec.compress(input, level);
+      return compressed;
+    } finally {
+      codec.delete ? codec.delete() : null;
     }
-    throw e;
-  }
+  });
 }
 
 async function zstdDecompress(data) {
-  if (!zstdLib) throw new Error('zstd library not loaded');
-
-  try {
-    const codec = await zstdLib.Simple();
-    const decompressed = codec.decompress(data);
-    codec.delete ? codec.delete() : null;
-    return decompressed;
-  } catch (e) {
-    if (typeof zstdLib.decompress === 'function') {
-      return zstdLib.decompress(data);
+  return withCodec((zstd) => {
+    const codec = zstd.Simple();
+    try {
+      return codec.decompress(data);
+    } finally {
+      codec.delete ? codec.delete() : null;
     }
-    throw e;
-  }
+  });
 }
 
 async function encodeCode(slots) {
