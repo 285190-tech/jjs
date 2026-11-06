@@ -17,6 +17,7 @@ const thresholdInput = document.getElementById('threshold');
 const colorModeInput = document.getElementById('colorMode');
 const singleColorRow = document.getElementById('singleColorRow');
 const singleColorInput = document.getElementById('singleColor');
+const moveTypeInput = document.getElementById('moveType');
 const durationInput = document.getElementById('duration');
 const fpsInput = document.getElementById('fps');
 const videoSettingsRow = document.getElementById('videoSettingsRow');
@@ -71,6 +72,10 @@ durationInput.addEventListener('input', () => {
 });
 fpsInput.addEventListener('input', () => {
   fpsVal.textContent = fpsInput.value;
+});
+
+moveTypeInput.addEventListener('change', () => {
+  // No special UI needed for move type change
 });
 
 colorModeInput.addEventListener('change', () => {
@@ -402,7 +407,8 @@ async function generateMoveset() {
     drawBlockPreview(blocks, blockSize, gap, mediaType === 'video' ? media.duration : duration);
     blockCountEl.textContent = `Blocks: ${blocks.length}`;
 
-    const moveset = buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration);
+    const moveType = moveTypeInput.value;
+    const moveset = buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration, moveType);
 
     const json = JSON.stringify(moveset, null, 2);
     const code = await encodeCode(moveset.slots);
@@ -587,7 +593,7 @@ function drawBlockPreview(blocks, blockSize, gap, totalTime) {
 
 // ---- Build JJS slot structure ----
 
-function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration) {
+function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration, moveType) {
   const slots = [];
 
   const timeGroups = new Map();
@@ -603,21 +609,35 @@ function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleC
   timeGroups.forEach((group, timeKey) => {
     const time = parseFloat(timeKey);
     group.forEach(b => {
-      line.push({
-        K_NAME: 'HITBOX',
-        PREVIEW: [0, 0.1],
-        DAMAGE: 1,
-        STUN_ANIM: true,
-        HIT_USER: false,
-        BLOCKABLE: false,
-        SINGLE_TARGET: false,
-        SIZE: `${blockSize}, ${blockSize}, ${blockSize}`,
-        COLOR: b.color.replace('rgb(', '').replace(')', ''),
-        POSITION: `${b.x.toFixed(3)}, ${b.y.toFixed(3)}, 0`,
-        ROTATION: '0, 0, 0',
-        TIME: Math.round(time * 1000) / 1000,
-        ID: `b${eventId++}`,
-      });
+      if (moveType === 'particle') {
+        line.push({
+          K_NAME: 'VISUAL',
+          EFFECT: 'Particle',
+          COLOR: b.color.replace('rgb(', '').replace(')', ''),
+          SIZE: `${blockSize}, ${blockSize}, ${blockSize}`,
+          POSITION: `${b.x.toFixed(3)}, ${b.y.toFixed(3)}, 0`,
+          ROTATION: '0, 0, 0',
+          TIME: Math.round(time * 1000) / 1000,
+          OPACITY: b.opacity,
+          ID: `b${eventId++}`,
+        });
+      } else {
+        line.push({
+          K_NAME: 'HITBOX',
+          PREVIEW: [0, 0.1],
+          DAMAGE: 1,
+          STUN_ANIM: true,
+          HIT_USER: false,
+          BLOCKABLE: false,
+          SINGLE_TARGET: false,
+          SIZE: `${blockSize}, ${blockSize}, ${blockSize}`,
+          COLOR: b.color.replace('rgb(', '').replace(')', ''),
+          POSITION: `${b.x.toFixed(3)}, ${b.y.toFixed(3)}, 0`,
+          ROTATION: '0, 0, 0',
+          TIME: Math.round(time * 1000) / 1000,
+          ID: `b${eventId++}`,
+        });
+      }
     });
   });
 
@@ -650,6 +670,7 @@ function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleC
       singleColor,
       duration,
       fps: mediaType === 'video' ? parseInt(fpsInput.value, 10) : null,
+      moveType,
     },
   };
 }
