@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>jjs — Image to Moveset Converter</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>jjs</h1>
+  <p>Image → JJS custom moveset (particle-based) converter</p>
+</header>
+
+<main>
+  <section class="panel upload">
+    <h2>1. Upload Image</h2>
+    <input type="file" id="imageInput" accept="image/*">
+    <p class="hint">PNG, JPG, GIF, WEBP. Everything runs in your browser — nothing is uploaded to a server.</p>
+  </section>
+
+  <section class="panel controls">
+    <h2>2. Settings</h2>
+    <div class="row">
+      <label>Resolution <span id="resVal">32</span></label>
+      <input type="range" id="resolution" min="8" max="128" value="32">
+    </div>
+    <div class="row">
+      <label>Particle Size <span id="sizeVal">4</span></label>
+      <input type="range" id="particleSize" min="1" max="20" value="4">
+    </div>
+    <div class="row">
+      <label>Alpha Threshold <span id="threshVal">128</span></label>
+      <input type="range" id="threshold" min="0" max="255" value="128">
+    </div>
+    <div class="row">
+      <label>Color Mode</label>
+      <select id="colorMode">
+        <option value="original">Original Colors</option>
+        <option value="grayscale">Grayscale</option>
+        <option value="single">Single Color</option>
+      </select>
+    </div>
+    <div class="row color-row" id="singleColorRow" style="display:none">
+      <label>Particle Color</label>
+      <input type="color" id="singleColor" value="#00ff9d">
+    </div>
+    <div class="row actions">
+      <button id="regenBtn" disabled>Regenerate Moveset</button>
+    </div>
+  </section>
+
+  <section class="panel preview">
+    <h2>3. Preview</h2>
+    <div class="canvas-wrap">
+      <div class="canvas-label">Original</div>
+      <canvas id="origCanvas"></canvas>
+    </div>
+    <div class="canvas-wrap">
+      <div class="canvas-label">Particle Moveset</div>
+      <canvas id="particleCanvas"></canvas>
+    </div>
+    <p id="particleCount" class="hint">Particles: 0</p>
+  </section>
+
+  <section class="panel export">
+    <h2>4. Export</h2>
+    <div class="row">
+      <label>Format</label>
+      <select id="exportFormat">
+        <option value="code">Encoded Code String</option>
+        <option value="json">JSON (readable)</option>
+      </select>
+    </div>
+    <textarea id="output" readonly placeholder="Generate a moveset to see the code here..."></textarea>
+    <div class="row actions">
+      <button id="copyBtn">Copy to Clipboard</button>
+      <button id="downloadBtn">Download .jjsmoveset</button>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <p>
+    <strong>Disclaimer:</strong> This generates a moveset <em>structure</em> inspired by the Jujutsu Shenanigans Skill Builder.
+    The official JJS export string binary format is not publicly documented, so this output may not import directly into the game.
+    Use it as a blueprint for building particle-based movesets in the Skill Builder.
+  </p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
