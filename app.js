@@ -117,14 +117,20 @@ function updateZstdStatus(ready, message) {
 }
 
 async function loadZstdLibrary() {
-  // The bundled library exposes window.ZstdCodec.ZstdCodec.run(callback)
-  if (typeof window.ZstdCodec !== 'undefined' && typeof window.ZstdCodec.ZstdCodec?.run === 'function') {
-    getZstdCodec = new Promise((resolve) => {
-      window.ZstdCodec.ZstdCodec.run((zstd) => resolve(zstd));
-    });
-    updateZstdStatus(true);
-    return;
-  }
+  const tryInit = () => {
+    if (typeof window.ZstdCodec !== 'undefined' && typeof window.ZstdCodec.ZstdCodec?.run === 'function') {
+      getZstdCodec = new Promise((resolve, reject) => {
+        window.ZstdCodec.ZstdCodec.run((zstd) => {
+          resolve(zstd);
+          updateZstdStatus(true);
+        });
+      });
+      return true;
+    }
+    return false;
+  };
+
+  if (tryInit()) return;
 
   // Fallback: try loading from local bundle
   try {
@@ -132,12 +138,7 @@ async function loadZstdLibrary() {
     script.src = 'js/zstd-codec.bundle.js';
     script.onload = () => {
       setTimeout(() => {
-        if (typeof window.ZstdCodec !== 'undefined' && typeof window.ZstdCodec.ZstdCodec?.run === 'function') {
-          getZstdCodec = new Promise((resolve) => {
-            window.ZstdCodec.ZstdCodec.run((zstd) => resolve(zstd));
-          });
-          updateZstdStatus(true);
-        } else {
+        if (!tryInit()) {
           updateZstdStatus(false, 'zstd library loaded but API not found');
         }
       }, 500);
