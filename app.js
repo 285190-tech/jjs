@@ -230,7 +230,7 @@ async function loadZstdLibrary() {
     }
   } catch (e) {
     clearInterval(iv);
-    updateZstdStatus(false, 'Failed to load zstd library: ' + e.message, 100);
+    updateZstdStatus(false, 'Failed to load zstd library: ' + (e.message || e.toString() || 'unknown error'), 100);
   }
 }
 
@@ -279,13 +279,19 @@ async function encodeCode(slots) {
   const json = JSON.stringify(encodeSlots, { separators: [',', ':'] });
   const compressed = await zstdCompress(json, 19);
 
-  // base64 encode
+  // base64 encode (chunked to avoid OOM on large inputs)
   const bytes = new Uint8Array(compressed);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
+  const chunkSize = 65536;
+  let result = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    let binary = '';
+    for (let j = 0; j < chunk.length; j++) {
+      binary += String.fromCharCode(chunk[j]);
+    }
+    result += btoa(binary);
   }
-  return btoa(binary);
+  return result;
 }
 
 async function decodeCode(code) {
@@ -616,6 +622,43 @@ function drawBlockPreview(blocks, blockSize, gap, totalTime) {
 
 // ---- Build JJS slot structure ----
 
+// Max events per slot to stay under the 16MB WASM heap limit.
+// Each slot's DATA is compressed independently, so splitting across
+// slots lets us handle arbitrarily large videos/images.
+const MAX_EVENTS_PER_SLOT = 4000;
+
+function buildVISUALot(b, blockSize, effectType, eventId) {
+  const colorStr = b.color.replace('rgb(', '').replace(')', '');
+  return {
+    K_NAME: 'VISUAL',
+    EFFECT: effectType,
+    COLOR: colorStr,
+    SIZE: `${blockSize}, ${blockSize}, ${blockSize}`,
+    POSITION: `${b.x.toFixed(3)}, ${b.y.toFixed(3)}, 0`,
+    TIME: Math.round(b.time * 1000) / 1000,
+    OPACITY: b.opacity,
+    ID: `b${eventId}`,
+  };
+}
+
+function buildHITBOX(b, blockSize, eventId) {
+  const colorStr = b.color.replace('rgb(', '').replace(')', '');
+  return {
+    K_NAME: 'HITBOX',
+    PREVIEW: [0, 0.1],
+    DAMAGE: 1,
+    STUN_ANIM: true,
+    HIT_USER: false,
+    BLOCKABLE: false,
+    SINGLE_TARGET: false,
+    SIZE: `${blockSize}, ${blockSize}, ${blockSize}`,
+    COLOR: colorStr,
+    POSITION: `${b.x.toFixed(3)}, ${b.y.toFixed(3)}, 0`,
+    TIME: Math.round(b.time * 1000) / 1000,
+    ID: `b${eventId}`,
+  };
+}
+
 function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration, moveType, effectType) {
   const slots = [];
 
@@ -626,6 +669,7 @@ function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleC
     timeGroups.get(key).push(b);
   });
 
+  // Build all events in order
   const line = [];
   let eventId = 0;
 
@@ -633,50 +677,36 @@ function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleC
     const time = parseFloat(timeKey);
     group.forEach(b => {
       if (moveType === 'particle') {
-        line.push({
-          K_NAME: 'VISUAL',
-          EFFECT: effectType,
-          COLOR: b.color.replace('rgb(', '').replace(')', ''),
-          SIZE: `${blockSize}, ${blockSize}, ${blockSize}`,
-          POSITION: `${b.x.toFixed(3)}, ${b.y.toFixed(3)}, 0`,
-          ROTATION: '0, 0, 0',
-          TIME: Math.round(time * 1000) / 1000,
-          OPACITY: b.opacity,
-          ID: `b${eventId++}`,
-        });
+        line.push(buildVISUALot(b, blockSize, effectType, eventId++));
       } else {
-        line.push({
-          K_NAME: 'HITBOX',
-          PREVIEW: [0, 0.1],
-          DAMAGE: 1,
-          STUN_ANIM: true,
-          HIT_USER: false,
-          BLOCKABLE: false,
-          SINGLE_TARGET: false,
-          SIZE: `${blockSize}, ${blockSize}, ${blockSize}`,
-          COLOR: b.color.replace('rgb(', '').replace(')', ''),
-          POSITION: `${b.x.toFixed(3)}, ${b.y.toFixed(3)}, 0`,
-          ROTATION: '0, 0, 0',
-          TIME: Math.round(time * 1000) / 1000,
-          ID: `b${eventId++}`,
-        });
+        line.push(buildHITBOX(b, blockSize, eventId++));
       }
     });
   });
 
-  slots.push({
-    DATA: {
-      Req: [],
-      Line: line,
-      Prop: [],
-      Branch: null,
-    },
-    NAME: mediaType === 'video' ? 'Video Moveset' : 'Image Moveset',
-    K_NAME: 'SKILL',
-    KEY: 1,
-    TOOL_TIP: `${mediaType} moveset generated from media`,
-    COOLDOWN: mediaType === 'video' ? Math.ceil(duration) : 5,
-  });
+  // Split events across multiple slots if needed to stay under WASM heap limit
+  const numSlots = Math.ceil(line.length / MAX_EVENTS_PER_SLOT) || 1;
+
+  for (let s = 0; s < numSlots; s++) {
+    const start = s * MAX_EVENTS_PER_SLOT;
+    const chunk = line.slice(start, start + MAX_EVENTS_PER_SLOT);
+
+    slots.push({
+      DATA: {
+        Req: [],
+        Line: chunk,
+        Prop: [],
+        Branch: null,
+      },
+      NAME: numSlots === 1
+        ? (mediaType === 'video' ? 'Video Moveset' : 'Image Moveset')
+        : `${mediaType === 'video' ? 'Video' : 'Image'} Moveset Part ${s + 1}`,
+      K_NAME: 'SKILL',
+      KEY: s + 1,
+      TOOL_TIP: `${mediaType} moveset generated from media${numSlots > 1 ? ` (part ${s + 1}/${numSlots})` : ''}`,
+      COOLDOWN: mediaType === 'video' ? Math.ceil(duration) : 5,
+    });
+  }
 
   return {
     name: `${mediaType}-moveset`,
@@ -695,6 +725,7 @@ function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleC
       fps: mediaType === 'video' ? parseInt(fpsInput.value, 10) : null,
       moveType,
       effectType,
+      numSlots,
     },
   };
 }
