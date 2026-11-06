@@ -1,8 +1,9 @@
 /**
  * jjs — Image/Video to JJS custom moveset converter
  *
- * Frontend: media upload, block-tile grid generation, preview.
- * Backend (Node.js): zstd encode/decode for real JJS Skill Builder import codes.
+ * Fully client-side. Loads a zstd library from CDN and does all
+ * encode/decode in the browser — no backend required. Works on
+ * Cloudflare Pages, GitHub Pages, or any static host.
  *
  * Import in-game: Private Server → Free Build → Place Character Block →
  * Configure → Import/Clipboard → paste code.
@@ -30,7 +31,7 @@ const copyBtn = document.getElementById('copyBtn');
 const downloadBtn = document.getElementById('downloadBtn');
 const importInput = document.getElementById('importInput');
 const decodeBtn = document.getElementById('decodeBtn');
-const serverStatus = document.getElementById('serverStatus');
+const zstdStatus = document.getElementById('zstdStatus');
 
 const resVal = document.getElementById('resVal');
 const sizeVal = document.getElementById('sizeVal');
@@ -42,7 +43,8 @@ const fpsVal = document.getElementById('fpsVal');
 let media = null;        // HTMLImageElement or HTMLVideoElement
 let mediaType = null;    // 'image' or 'video'
 let blocks = [];         // flattened block list with time stamps
-let serverReady = false;
+let zstdReady = false;
+let zstdLib = null;
 
 // ---- UI wiring ----
 
@@ -84,49 +86,161 @@ exportFormat.addEventListener('change', async () => {
   try {
     if (exportFormat.value === 'code') {
       const parsed = JSON.parse(output.value);
-      const res = await fetch('/api/encode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slots: parsed.slots || parsed }),
-      });
-      const data = await res.json();
-      if (data.code) output.value = data.code;
+      const code = await encodeCode(parsed.slots || parsed);
+      if (code) output.value = code;
     } else {
-      const res = await fetch('/api/decode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: output.value }),
-      });
-      const data = await res.json();
-      if (data.slots) output.value = JSON.stringify({ slots: data.slots }, null, 2);
+      const decoded = await decodeCode(output.value);
+      if (decoded) output.value = JSON.stringify({ slots: decoded }, null, 2);
     }
   } catch (e) {
     console.error(e);
+    alert('Conversion failed: ' + e.message);
   }
 });
 
-// ---- Server readiness check ----
+// ---- zstd library loading ----
 
-async function checkServer() {
-  try {
-    await fetch('/api/decode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: 'KLUv/SC2XQQAMkgbGVBZBzBSojMUqD' }),
-    });
-    serverReady = true;
-    serverStatus.textContent = 'Server ready — generating real JJS import codes.';
-    serverStatus.style.color = '#00ff9d';
+function updateZstdStatus(ready, message) {
+  zstdReady = ready;
+  if (ready) {
+    zstdStatus.textContent = 'zstd ready — generating real JJS import codes.';
+    zstdStatus.style.color = '#00ff9d';
     regenBtn.disabled = false;
+    regenBtn.textContent = 'Regenerate Moveset';
     if (media) generateMoveset();
-  } catch (e) {
-    serverReady = false;
-    serverStatus.textContent = 'Server not available — codes will not generate.';
-    serverStatus.style.color = '#ff6b6b';
-    setTimeout(checkServer, 1000);
+  } else {
+    zstdStatus.textContent = message || 'zstd library not available.';
+    zstdStatus.style.color = '#ff6b6b';
+    regenBtn.disabled = true;
+    regenBtn.textContent = 'zstd not loaded';
   }
 }
-checkServer();
+
+async function loadZstdLibrary() {
+  // If already loaded, nothing to do
+  if (typeof ZstdCodec !== 'undefined') {
+    zstdLib = ZstdCodec;
+    updateZstdStatus(true);
+    return;
+  }
+
+  return new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/zstd-codec@latest/dist/zstd-codec.min.js';
+    script.onload = () => {
+      // Give the WASM a moment to initialize
+      setTimeout(() => {
+        if (typeof ZstdCodec !== 'undefined') {
+          zstdLib = ZstdCodec;
+          updateZstdStatus(true);
+        } else {
+          updateZstdStatus(false, 'zstd library loaded but API not found');
+        }
+        resolve();
+      }, 500);
+    };
+    script.onerror = () => {
+      updateZstdStatus(false, 'Failed to load zstd library from CDN. Check your internet connection.');
+      resolve();
+    };
+    document.head.appendChild(script);
+
+    // Timeout fallback
+    setTimeout(() => {
+      if (!zstdReady && typeof ZstdCodec === 'undefined') {
+        updateZstdStatus(false, 'zstd library failed to load (timeout).');
+        resolve();
+      }
+    }, 5000);
+  });
+}
+
+// Initialize zstd on page load
+loadZstdLibrary();
+
+// ---- zstd encode/decode ----
+
+async function zstdCompress(data, level) {
+  if (!zstdLib) throw new Error('zstd library not loaded');
+
+  try {
+    // Try ZstdCodec.Simple API
+    const codec = await zstdLib.Simple();
+    const input = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    const compressed = codec.compress(input, level);
+    codec.delete ? codec.delete() : null;
+    return compressed;
+  } catch (e) {
+    // Fallback: try direct compress on the lib object
+    if (typeof zstdLib.compress === 'function') {
+      const input = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+      return zstdLib.compress(input, level);
+    }
+    throw e;
+  }
+}
+
+async function zstdDecompress(data) {
+  if (!zstdLib) throw new Error('zstd library not loaded');
+
+  try {
+    const codec = await zstdLib.Simple();
+    const decompressed = codec.decompress(data);
+    codec.delete ? codec.delete() : null;
+    return decompressed;
+  } catch (e) {
+    if (typeof zstdLib.decompress === 'function') {
+      return zstdLib.decompress(data);
+    }
+    throw e;
+  }
+}
+
+async function encodeCode(slots) {
+  if (!zstdReady) throw new Error('zstd library not ready');
+
+  // Each slot's DATA must be a JSON string (double-encoded)
+  const encodeSlots = slots.map(s => ({
+    ...s,
+    DATA: typeof s.DATA === 'string' ? s.DATA : JSON.stringify(s.DATA),
+  }));
+  const json = JSON.stringify(encodeSlots, { separators: [',', ':'] });
+  const compressed = await zstdCompress(json, 19);
+
+  // base64 encode
+  const bytes = new Uint8Array(compressed);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+async function decodeCode(code) {
+  if (!zstdReady) throw new Error('zstd library not ready');
+
+  let b64 = code.trim();
+  if (b64.startsWith('jjs:')) b64 = b64.slice(4);
+
+  const binary = atob(b64);
+  const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+  const decompressed = await zstdDecompress(bytes);
+  const json = new TextDecoder().decode(decompressed);
+  const slots = JSON.parse(json);
+
+  // Expand inner DATA strings into nested objects
+  return slots.map(slot => {
+    const expanded = { ...slot };
+    if (typeof expanded.DATA === 'string') {
+      try {
+        expanded.DATA = JSON.parse(expanded.DATA);
+      } catch (e) {
+        // keep as string
+      }
+    }
+    return expanded;
+  });
+}
 
 // ---- Media handling ----
 
@@ -153,7 +267,7 @@ function handleMediaSelect(e) {
       media = vid;
       mediaInfoEl.textContent = `Video: ${vid.videoWidth}×${vid.videoHeight}, ${vid.duration.toFixed(2)}s`;
       drawOriginalFrame(0);
-      if (serverReady) {
+      if (zstdReady) {
         regenBtn.disabled = false;
         generateMoveset();
       }
@@ -169,7 +283,7 @@ function handleMediaSelect(e) {
       mediaInfoEl.textContent = `Image: ${img.width}×${img.height}`;
       drawOriginal();
       URL.revokeObjectURL(url);
-      if (serverReady) {
+      if (zstdReady) {
         regenBtn.disabled = false;
         generateMoveset();
       }
@@ -199,7 +313,6 @@ function drawOriginalFrame(time) {
   const ctx = canvas.getContext('2d');
   const vid = media;
 
-  // Seek to the frame
   vid.currentTime = time;
   vid.onseeked = () => {
     const maxDisp = 400;
@@ -213,7 +326,7 @@ function drawOriginalFrame(time) {
 // ---- Core conversion ----
 
 async function generateMoveset() {
-  if (!media || !serverReady) return;
+  if (!media || !zstdReady) return;
 
   const res = parseInt(resolutionInput.value, 10);
   const blockSize = parseInt(blockSizeInput.value, 10);
@@ -236,13 +349,7 @@ async function generateMoveset() {
   const moveset = buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration);
 
   const json = JSON.stringify(moveset, null, 2);
-  const codeRes = await fetch('/api/encode', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ slots: moveset.slots }),
-  });
-  const codeData = await codeRes.json();
-  const code = codeData.code || '';
+  const code = await encodeCode(moveset.slots);
 
   output.value = exportFormat.value === 'code' ? code : json;
 }
@@ -294,7 +401,7 @@ function sampleImageToBlocks(image, res, threshold, colorMode, singleColor, dura
         color,
         size: blockSize,
         opacity: a / 255,
-        time: duration,   // all blocks appear at once
+        time: duration,
       });
     }
   }
@@ -306,7 +413,6 @@ async function sampleVideoToBlocks(video, res, threshold, colorMode, singleColor
   const blocks = [];
   const vid = video;
 
-  // Clamp duration to video length
   const effectiveDuration = Math.min(duration, vid.duration);
   const frameInterval = 1.0 / fps;
   const numFrames = Math.ceil(effectiveDuration / frameInterval);
@@ -320,7 +426,6 @@ async function sampleVideoToBlocks(video, res, threshold, colorMode, singleColor
     const t = f * frameInterval;
     if (t > effectiveDuration) break;
 
-    // Seek video to this timestamp
     await seekAndDrawFrame(vid, t, off, octx, res, res);
 
     const imageData = octx.getImageData(0, 0, res, res);
@@ -356,7 +461,7 @@ async function sampleVideoToBlocks(video, res, threshold, colorMode, singleColor
         color,
         size: blockSize,
         opacity: a / 255,
-        time: t,   // when this block appears in the moveset
+        time: t,
       });
     }
   }
@@ -376,7 +481,6 @@ function seekAndDrawFrame(video, time, canvas, ctx, width, height) {
     };
     video.addEventListener('seeked', onSeeked, { once: true });
     video.currentTime = time;
-    // Fallback if seeked doesn't fire
     setTimeout(() => {
       if (!resolved) {
         resolved = true;
@@ -400,20 +504,13 @@ function drawBlockPreview(blocks, blockSize, gap, totalTime) {
   ctx.fillStyle = '#0b0c10';
   ctx.fillRect(0, 0, size, size);
 
-  // Determine resolution from block grid
   const res = Math.ceil(Math.sqrt(blocks.length)) || 32;
-
-  // Calculate tile size so blocks touch by default (gap=0)
-  // total width = res * tileSize + (res - 1) * gap = size
-  // tileSize = (size - (res - 1) * gap) / res
   const tileSize = (size - (res - 1) * gap) / res;
   const stride = tileSize + gap;
 
-  // If video, show blocks at the midpoint time for preview
   const previewTime = totalTime / 2;
 
   blocks.forEach(b => {
-    // For video preview, only show blocks near the midpoint time
     if (mediaType === 'video' && Math.abs(b.time - previewTime) > 0.5) return;
 
     const px = Math.round(b.gx * stride);
@@ -431,7 +528,6 @@ function drawBlockPreview(blocks, blockSize, gap, totalTime) {
 function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration) {
   const slots = [];
 
-  // Group blocks by time for video, or all at once for image
   const timeGroups = new Map();
   blocks.forEach(b => {
     const key = b.time.toFixed(3);
@@ -439,7 +535,6 @@ function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleC
     timeGroups.get(key).push(b);
   });
 
-  // Build Line array with hitbox events at each timestamp
   const line = [];
   let eventId = 0;
 
@@ -464,7 +559,6 @@ function buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleC
     });
   });
 
-  // Main skill slot
   slots.push({
     DATA: {
       Req: [],
@@ -538,26 +632,15 @@ async function decodeExistingCode() {
   const code = importInput.value.trim();
   if (!code) return;
 
-  if (!serverReady) {
-    alert('Server not ready yet. Please wait a moment.');
+  if (!zstdReady) {
+    alert('zstd library not ready yet. Please wait a moment.');
     return;
   }
 
   try {
-    const res = await fetch('/api/decode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code }),
-    });
-    const data = await res.json();
-
-    if (data.error) {
-      alert('Failed to decode code: ' + data.error);
-      return;
-    }
-
+    const decoded = await decodeCode(code);
     exportFormat.value = 'json';
-    output.value = JSON.stringify({ slots: data.slots }, null, 2);
+    output.value = JSON.stringify({ slots: decoded }, null, 2);
     output.scrollTop = 0;
   } catch (e) {
     alert('Failed to decode code: ' + e.message);
