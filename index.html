@@ -22,20 +22,20 @@
 
   <section class="panel controls">
     <h2>2. Settings</h2>
-    <div class="row">
-      <label>Resolution <span id="resVal">32</span></label>
+    <div class="row num-row">
+      <label>Resolution <input type="number" id="resNum" min="8" max="64" value="32" class="num-input"></label>
       <input type="range" id="resolution" min="8" max="64" value="32">
     </div>
-    <div class="row">
-      <label>Block Size <span id="sizeVal">4</span></label>
+    <div class="row num-row">
+      <label>Block Size <input type="number" id="sizeNum" min="1" max="20" value="4" class="num-input"></label>
       <input type="range" id="blockSize" min="1" max="20" value="4">
     </div>
-    <div class="row">
-      <label>Gap Between Blocks <span id="gapVal">0</span></label>
+    <div class="row num-row">
+      <label>Gap Between Blocks <input type="number" id="gapNum" min="0" max="10" value="0" class="num-input"></label>
       <input type="range" id="gap" min="0" max="10" value="0">
     </div>
-    <div class="row">
-      <label>Alpha Threshold <span id="threshVal">128</span></label>
+    <div class="row num-row">
+      <label>Alpha Threshold <input type="number" id="threshNum" min="0" max="255" value="128" class="num-input"></label>
       <input type="range" id="threshold" min="0" max="255" value="128">
     </div>
     <div class="row">
@@ -76,12 +76,12 @@
         <option value="Rough Energy">Rough Energy</option>
       </select>
     </div>
-    <div class="row">
-      <label>Duration (seconds) <span id="durVal">1.0</span></label>
+    <div class="row num-row">
+      <label>Duration (seconds) <input type="number" id="durNum" min="0.1" max="10.0" step="0.1" value="1.0" class="num-input"></label>
       <input type="range" id="duration" min="0.1" max="10.0" step="0.1" value="1.0">
     </div>
-    <div class="row" id="videoSettingsRow" style="display:none">
-      <label>Video Frame Rate (fps) <span id="fpsVal">10</span></label>
+    <div class="row num-row" id="videoSettingsRow" style="display:none">
+      <label>Video Frame Rate (fps) <input type="number" id="fpsNum" min="1" max="30" value="10" class="num-input"></label>
       <input type="range" id="fps" min="1" max="30" value="10">
     </div>
     <div class="row actions">
@@ -94,6 +94,7 @@
     <div class="canvas-wrap">
       <div class="canvas-label">Original</div>
       <canvas id="origCanvas"></canvas>
+      <video id="videoPreview" style="display:none; max-width:100%; border:1px solid var(--border); border-radius:4px; margin-top:0.5rem;"></video>
     </div>
     <div class="canvas-wrap">
       <div class="canvas-label">Block Moveset</div>
