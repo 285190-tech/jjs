@@ -69,23 +69,30 @@
     <div class="row">
       <label>Format</label>
       <select id="exportFormat">
-        <option value="code">Encoded Code String</option>
+        <option value="code">JJS Import Code (base64+zstd)</option>
         <option value="json">JSON (readable)</option>
       </select>
+    </div>
+    <div class="row" id="serverStatus" style="margin-bottom:0.5rem;font-size:0.85rem;color:#66fcb1;">
+      Connecting to server…
     </div>
     <textarea id="output" readonly placeholder="Generate a moveset to see the code here..."></textarea>
     <div class="row actions">
       <button id="copyBtn">Copy to Clipboard</button>
       <button id="downloadBtn">Download .jjsmoveset</button>
     </div>
+    <div class="row import-row" style="margin-top:0.75rem;">
+      <label style="margin-bottom:0.25rem;display:block;font-size:0.85rem;">Decode an existing JJS moveset code</label>
+      <textarea id="importInput" rows="2" placeholder="Paste a JJS moveset code here..."></textarea>
+      <button id="decodeBtn" style="margin-top:0.4rem;">Decode Code → JSON</button>
+    </div>
   </section>
 </main>
 
 <footer>
   <p>
-    <strong>Disclaimer:</strong> This generates a moveset <em>structure</em> inspired by the Jujutsu Shenanigans Skill Builder.
-    The official JJS export string binary format is not publicly documented, so this output may not import directly into the game.
-    Use it as a blueprint for building particle-based movesets in the Skill Builder.
+    <strong>Disclaimer:</strong> This generates JJS Skill Builder import codes (base64 → zstd → JSON).
+    Codes may break after JJS game updates. Import via: Private Server → Free Build → Place Character Block → Configure → Import/Clipboard → paste code.
   </p>
 </footer>
 

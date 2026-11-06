@@ -1,12 +1,11 @@
 /**
  * jjs — Image to JJS custom moveset converter
  *
- * Converts an uploaded image into a particle-grid moveset blueprint.
- * Output: readable JSON + an encoded shareable code string (base64 of the JSON).
+ * Frontend: image upload, particle-grid generation, preview.
+ * Backend (Node.js): zstd encode/decode for real JJS Skill Builder import codes.
  *
- * NOTE: The official JJS Skill Builder export binary format is not publicly
- * documented, so this tool produces a moveset *structure* you can use as a
- * blueprint — not a guaranteed in-game import string.
+ * Import in-game: Private Server → Free Build → Place Character Block →
+ * Configure → Import/Clipboard → paste code.
  */
 
 const imageInput = document.getElementById('imageInput');
@@ -24,6 +23,9 @@ const exportFormat = document.getElementById('exportFormat');
 const output = document.getElementById('output');
 const copyBtn = document.getElementById('copyBtn');
 const downloadBtn = document.getElementById('downloadBtn');
+const importInput = document.getElementById('importInput');
+const decodeBtn = document.getElementById('decodeBtn');
+const serverStatus = document.getElementById('serverStatus');
 
 const resVal = document.getElementById('resVal');
 const sizeVal = document.getElementById('sizeVal');
@@ -31,6 +33,7 @@ const threshVal = document.getElementById('threshVal');
 
 let img = null;
 let particles = [];
+let serverReady = false;
 
 // ---- UI wiring ----
 
@@ -56,6 +59,57 @@ imageInput.addEventListener('change', handleFileSelect);
 regenBtn.addEventListener('click', generateMoveset);
 copyBtn.addEventListener('click', copyOutput);
 downloadBtn.addEventListener('click', downloadOutput);
+decodeBtn.addEventListener('click', decodeExistingCode);
+
+exportFormat.addEventListener('change', async () => {
+  if (!output.value) return;
+  try {
+    if (exportFormat.value === 'code') {
+      const parsed = JSON.parse(output.value);
+      const res = await fetch('/api/encode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slots: parsed.slots || parsed }),
+      });
+      const data = await res.json();
+      if (data.code) output.value = data.code;
+    } else {
+      const res = await fetch('/api/decode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: output.value }),
+      });
+      const data = await res.json();
+      if (data.slots) output.value = JSON.stringify({ slots: data.slots }, null, 2);
+    }
+  } catch (e) {
+    console.error(e);
+  }
+});
+
+// ---- Server readiness check ----
+
+async function checkServer() {
+  try {
+    const res = await fetch('/api/decode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'KLUv/SC2XQQAMkgbGVBZBzBSojMUqD' }),
+    });
+    // Even a 400 means the server is up
+    serverReady = true;
+    serverStatus.textContent = 'Server ready — generating real JJS import codes.';
+    serverStatus.style.color = '#00ff9d';
+    regenBtn.disabled = false;
+    if (img) generateMoveset();
+  } catch (e) {
+    serverReady = false;
+    serverStatus.textContent = 'Server not available — codes will not generate.';
+    serverStatus.style.color = '#ff6b6b';
+    setTimeout(checkServer, 1000);
+  }
+}
+checkServer();
 
 // ---- File handling ----
 
@@ -68,8 +122,10 @@ function handleFileSelect(e) {
   img.onload = () => {
     URL.revokeObjectURL(url);
     drawOriginal();
-    regenBtn.disabled = false;
-    generateMoveset();
+    if (serverReady) {
+      regenBtn.disabled = false;
+      generateMoveset();
+    }
   };
   img.src = url;
 }
@@ -78,7 +134,6 @@ function drawOriginal() {
   const canvas = origCanvas;
   const ctx = canvas.getContext('2d');
 
-  // Fit canvas to a max display size while keeping aspect ratio
   const maxDisp = 400;
   const scale = Math.min(maxDisp / img.width, maxDisp / img.height, 1);
   canvas.width = img.width * scale;
@@ -89,8 +144,8 @@ function drawOriginal() {
 
 // ---- Core conversion ----
 
-function generateMoveset() {
-  if (!img) return;
+async function generateMoveset() {
+  if (!img || !serverReady) return;
 
   const res = parseInt(resolutionInput.value, 10);
   const particleSize = parseInt(particleSizeInput.value, 10);
@@ -98,40 +153,25 @@ function generateMoveset() {
   const colorMode = colorModeInput.value;
   const singleColor = singleColorInput.value;
 
-  // Sample the image at `res` x `res` grid
   particles = sampleImageToParticles(img, res, threshold, colorMode, singleColor);
-
-  // Draw preview
   drawParticlePreview(particles, particleSize);
-
-  // Update count
   particleCountEl.textContent = `Particles: ${particles.length}`;
 
-  // Build moveset object
-  const moveset = {
-    name: 'image-moveset',
-    base: 'custom',
-    created: new Date().toISOString(),
-    source: 'jjs image converter',
-    settings: {
-      resolution: res,
-      particleSize,
-      threshold,
-      colorMode,
-      singleColor,
-    },
-    particles,
-  };
+  const moveset = buildMoveset(particles, res, particleSize, threshold, colorMode, singleColor);
 
-  // Export outputs
   const json = JSON.stringify(moveset, null, 2);
-  const code = encodeCode(moveset);
+  const codeRes = await fetch('/api/encode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slots: moveset.slots }),
+  });
+  const codeData = await codeRes.json();
+  const code = codeData.code || '';
 
   output.value = exportFormat.value === 'code' ? code : json;
 }
 
 function sampleImageToParticles(image, res, threshold, colorMode, singleColor) {
-  // Create an offscreen canvas to sample pixels
   const off = document.createElement('canvas');
   off.width = image.width;
   off.height = image.height;
@@ -148,7 +188,6 @@ function sampleImageToParticles(image, res, threshold, colorMode, singleColor) {
 
   for (let gy = 0; gy < res; gy++) {
     for (let gx = 0; gx < res; gx++) {
-      // Sample center of the grid cell
       const sx = Math.floor((gx + 0.5) * stepX);
       const sy = Math.floor((gy + 0.5) * stepY);
       const i = (sy * image.width + sx) * 4;
@@ -158,7 +197,6 @@ function sampleImageToParticles(image, res, threshold, colorMode, singleColor) {
       const b = data[i + 2];
       const a = data[i + 3];
 
-      // Alpha threshold: skip transparent cells
       if (a < threshold) continue;
 
       let color;
@@ -171,18 +209,16 @@ function sampleImageToParticles(image, res, threshold, colorMode, singleColor) {
         color = `rgb(${r},${g},${b})`;
       }
 
-      // Particle "intensity" based on brightness — affects size/lifetime hints
       const brightness = (r + g + b) / 3;
 
       particles.push({
         id: `${gx},${gy}`,
-        x: gx / (res - 1),   // normalized 0..1
-        y: gy / (res - 1),   // normalized 0..1
+        x: gx / (res - 1),
+        y: gy / (res - 1),
         color,
         size: particleSize,
         opacity: a / 255,
         brightness,
-        // JJS Skill Builder-ish hints (for manual recreation)
         skillSlot: null,
         animation: null,
         hitbox: null,
@@ -197,7 +233,6 @@ function drawParticlePreview(particles, particleSize) {
   const canvas = particleCanvas;
   const ctx = canvas.getContext('2d');
 
-  // Fixed preview size
   const size = 400;
   canvas.width = size;
   canvas.height = size;
@@ -206,7 +241,6 @@ function drawParticlePreview(particles, particleSize) {
   ctx.fillStyle = '#0b0c10';
   ctx.fillRect(0, 0, size, size);
 
-  // Draw each particle as a colored square (pixelated look)
   particles.forEach(p => {
     const px = Math.round(p.x * (size - particleSize));
     const py = Math.round(p.y * (size - particleSize));
@@ -218,21 +252,81 @@ function drawParticlePreview(particles, particleSize) {
   });
 }
 
-// ---- Export encoding ----
+// ---- Build JJS slot structure ----
 
-function encodeCode(moveset) {
-  const json = JSON.stringify(moveset);
-  const b64 = btoa(unescape(encodeURIComponent(json)));
-  // Prefix so it looks like a moveset code
-  return 'jjs:' + b64;
-}
+function buildMoveset(particles, res, particleSize, threshold, colorMode, singleColor) {
+  const slots = [];
 
-function decodeCode(code) {
-  const prefix = 'jjs:';
-  if (!code.startsWith(prefix)) return null;
-  const b64 = code.slice(prefix.length);
-  const json = decodeURIComponent(escape(atob(b64)));
-  return JSON.parse(json);
+  // Main skill slot — each particle becomes a hitbox entry
+  const line = particles.map(p => ({
+    K_NAME: 'HITBOX',
+    PREVIEW: [0, 0.1],
+    DAMAGE: 1,
+    STUN_ANIM: true,
+    HIT_USER: false,
+    BLOCKABLE: false,
+    SINGLE_TARGET: false,
+    SIZE: `${p.size}, ${p.size}, ${p.size}`,
+    COLOR: p.color.replace('rgb(', '').replace(')', ''),
+    POSITION: `${p.x.toFixed(3)}, ${p.y.toFixed(3)}, 0`,
+    ROTATION: '0, 0, 0',
+    TIME: 0.1,
+  }));
+
+  slots.push({
+    DATA: {
+      Req: [],
+      Line: line,
+      Prop: [],
+      Branch: null,
+    },
+    NAME: 'Image Moveset',
+    K_NAME: 'SKILL',
+    KEY: 1,
+    TOOL_TIP: 'Particle moveset generated from image',
+    COOLDOWN: 5,
+  });
+
+  // Visual slots for every 4th particle
+  particles.forEach((p, i) => {
+    if (i % 4 === 0) {
+      slots.push({
+        DATA: {
+          Req: [],
+          Line: [{
+            K_NAME: 'VISUAL',
+            EFFECT: 'Particle',
+            COLOR: p.color.replace('rgb(', '').replace(')', ''),
+            SIZE: `${p.size * 2}, ${p.size * 2}, ${p.size * 2}`,
+            POSITION: `${p.x.toFixed(3)}, ${p.y.toFixed(3)}, 0`,
+            ROTATION: '0, 0, 0',
+            TIME: 0.3,
+            OPACITY: p.opacity,
+          }],
+          Prop: [],
+          Branch: null,
+        },
+        NAME: `Particle ${i}`,
+        K_NAME: 'SKILL',
+        KEY: 2,
+        TOOL_TIP: 'Visual effect',
+        COOLDOWN: 0,
+      });
+    }
+  });
+
+  return {
+    name: 'image-moveset',
+    base: 'custom',
+    slots,
+    settings: {
+      resolution: res,
+      particleSize,
+      threshold,
+      colorMode,
+      singleColor,
+    },
+  };
 }
 
 // ---- Clipboard / download ----
@@ -246,7 +340,6 @@ async function copyOutput() {
     copyBtn.textContent = 'Copied!';
     setTimeout(() => { copyBtn.textContent = orig; }, 1200);
   } catch (err) {
-    // Fallback for older browsers
     output.select();
     document.execCommand('copy');
     const orig = copyBtn.textContent;
@@ -270,23 +363,34 @@ function downloadOutput() {
   URL.revokeObjectURL(url);
 }
 
-// ---- Format switch re-renders output ----
+// ---- Decode existing code ----
 
-exportFormat.addEventListener('change', () => {
-  if (!output.value) return;
-  try {
-    if (exportFormat.value === 'code') {
-      // Try to parse current JSON and re-encode
-      const parsed = JSON.parse(output.value);
-      output.value = encodeCode(parsed);
-    } else {
-      // Try to decode current code to JSON
-      const decoded = decodeCode(output.value);
-      if (decoded) {
-        output.value = JSON.stringify(decoded, null, 2);
-      }
-    }
-  } catch (e) {
-    // If conversion fails, leave as-is
+async function decodeExistingCode() {
+  const code = importInput.value.trim();
+  if (!code) return;
+
+  if (!serverReady) {
+    alert('Server not ready yet. Please wait a moment.');
+    return;
   }
-});
+
+  try {
+    const res = await fetch('/api/decode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      alert('Failed to decode code: ' + data.error);
+      return;
+    }
+
+    exportFormat.value = 'json';
+    output.value = JSON.stringify({ slots: data.slots }, null, 2);
+    output.scrollTop = 0;
+  } catch (e) {
+    alert('Failed to decode code: ' + e.message);
+  }
+}
