@@ -123,7 +123,7 @@ exportFormat.addEventListener('change', async () => {
     }
   } catch (e) {
     console.error(e);
-    showError('Conversion failed: ' + e.message);
+    showError('Conversion failed: ' + (e.message || e.toString() || 'unknown error'));
   } finally {
     setGenerating(false);
   }
@@ -332,15 +332,13 @@ function handleMediaSelect(e) {
   }
 
   if (isVideo) {
-    const vid = document.createElement('video');
-    vid.preload = 'metadata';
-    vid.src = url;
-    vid.onloadedmetadata = () => {
-      media = vid;
-      mediaInfoEl.textContent = `Video: ${vid.videoWidth}×${vid.videoHeight}, ${vid.duration.toFixed(2)}s`;
+    media = videoPreview;
+    media.preload = 'metadata';
+    media.src = url;
+    media.onloadedmetadata = () => {
+      mediaInfoEl.textContent = `Video: ${media.videoWidth}×${media.videoHeight}, ${media.duration.toFixed(2)}s`;
       drawOriginalFrame(0);
       // Show the actual video element for preview
-      videoPreview.src = url;
       videoPreview.style.display = 'block';
       origCanvas.style.display = 'none';
       setGenerating(false); // refresh button state
@@ -349,7 +347,7 @@ function handleMediaSelect(e) {
         generateMoveset();
       }
     };
-    vid.onerror = () => {
+    media.onerror = () => {
       showError('Failed to load video file.');
       URL.revokeObjectURL(url);
     };
@@ -392,7 +390,7 @@ function drawOriginal() {
 function drawOriginalFrame(time) {
   const canvas = origCanvas;
   const ctx = canvas.getContext('2d');
-  const vid = media;
+  const vid = videoPreview;
 
   vid.currentTime = time;
   vid.onseeked = () => {
@@ -441,7 +439,7 @@ async function generateMoveset() {
     output.value = exportFormat.value === 'code' ? code : json;
   } catch (e) {
     console.error(e);
-    showError('Generation failed: ' + e.message);
+    showError('Generation failed: ' + (e.message || e.toString() || 'unknown error'));
   } finally {
     setGenerating(false);
   }
@@ -753,7 +751,7 @@ async function decodeExistingCode() {
     output.value = JSON.stringify({ slots: decoded }, null, 2);
     output.scrollTop = 0;
   } catch (e) {
-    showError('Failed to decode code: ' + e.message);
+    showError('Failed to decode code: ' + (e.message || e.toString() || 'unknown error'));
   } finally {
     setGenerating(false);
   }
