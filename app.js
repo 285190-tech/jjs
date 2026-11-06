@@ -32,6 +32,10 @@ const downloadBtn = document.getElementById('downloadBtn');
 const importInput = document.getElementById('importInput');
 const decodeBtn = document.getElementById('decodeBtn');
 const zstdStatus = document.getElementById('zstdStatus');
+const zstdProgressRow = document.getElementById('zstdProgressRow');
+const zstdProgress = document.getElementById('zstdProgress');
+const zstdProgressText = document.getElementById('zstdProgressText');
+const errorMsg = document.getElementById('errorMsg');
 
 const resVal = document.getElementById('resVal');
 const sizeVal = document.getElementById('sizeVal');
@@ -45,6 +49,7 @@ let mediaType = null;    // 'image' or 'video'
 let blocks = [];         // flattened block list with time stamps
 let zstdReady = false;
 let getZstdCodec = null; // Promise that resolves to the codec object
+let isGenerating = false;
 
 // ---- UI wiring ----
 
@@ -84,6 +89,7 @@ decodeBtn.addEventListener('click', decodeExistingCode);
 exportFormat.addEventListener('change', async () => {
   if (!output.value) return;
   try {
+    setGenerating(true);
     if (exportFormat.value === 'code') {
       const parsed = JSON.parse(output.value);
       const code = await encodeCode(parsed.slots || parsed);
@@ -94,22 +100,49 @@ exportFormat.addEventListener('change', async () => {
     }
   } catch (e) {
     console.error(e);
-    alert('Conversion failed: ' + e.message);
+    showError('Conversion failed: ' + e.message);
+  } finally {
+    setGenerating(false);
   }
 });
 
+// ---- UI helpers ----
+
+function showError(msg) {
+  errorMsg.textContent = msg;
+  errorMsg.style.display = 'block';
+}
+
+function hideError() {
+  errorMsg.style.display = 'none';
+}
+
+function setGenerating(gen) {
+  isGenerating = gen;
+  regenBtn.disabled = gen || !zstdReady || !media;
+  regenBtn.textContent = gen ? 'Generating…' : 'Regenerate Moveset';
+  copyBtn.disabled = gen || !output.value;
+  downloadBtn.disabled = gen || !output.value;
+}
+
 // ---- zstd library loading ----
 
-function updateZstdStatus(ready, message) {
+function updateZstdStatus(ready, message, progress) {
   zstdReady = ready;
+  if (progress !== undefined) {
+    zstdProgressRow.style.display = 'block';
+    zstdProgress.style.width = progress + '%';
+    if (zstdProgressText) zstdProgressText.textContent = message;
+  }
   if (ready) {
     zstdStatus.textContent = 'zstd ready — generating real JJS import codes.';
     zstdStatus.style.color = '#00ff9d';
+    zstdProgressRow.style.display = 'none';
     regenBtn.disabled = false;
     regenBtn.textContent = 'Regenerate Moveset';
     if (media) generateMoveset();
-  } else {
-    zstdStatus.textContent = message || 'zstd library not available.';
+  } else if (message && !ready) {
+    zstdStatus.textContent = message;
     zstdStatus.style.color = '#ff6b6b';
     regenBtn.disabled = true;
     regenBtn.textContent = 'zstd not loaded';
@@ -122,7 +155,7 @@ async function loadZstdLibrary() {
       getZstdCodec = new Promise((resolve, reject) => {
         window.ZstdCodec.ZstdCodec.run((zstd) => {
           resolve(zstd);
-          updateZstdStatus(true);
+          updateZstdStatus(true, null, 100);
         });
       });
       return true;
@@ -133,22 +166,36 @@ async function loadZstdLibrary() {
   if (tryInit()) return;
 
   // Fallback: try loading from local bundle
+  zstdProgressRow.style.display = 'block';
   try {
     const script = document.createElement('script');
     script.src = 'js/zstd-codec.bundle.js';
     script.onload = () => {
       setTimeout(() => {
         if (!tryInit()) {
-          updateZstdStatus(false, 'zstd library loaded but API not found');
+          updateZstdStatus(false, 'zstd library loaded but API not found', 100);
         }
       }, 500);
     };
     script.onerror = () => {
-      updateZstdStatus(false, 'Failed to load zstd library. Check that js/zstd-codec.bundle.js exists.');
+      updateZstdStatus(false, 'Failed to load zstd library. Check that js/zstd-codec.bundle.js exists.', 100);
     };
     document.head.appendChild(script);
+
+    // Simulate progress while loading (real progress isn't available from script tag)
+    let p = 0;
+    const iv = setInterval(() => {
+      p += 5;
+      if (p >= 90 || zstdReady) {
+        clearInterval(iv);
+        if (!zstdReady) zstdProgress.style.width = '90%';
+      } else {
+        zstdProgress.style.width = p + '%';
+        if (zstdProgressText) zstdProgressText.textContent = 'Loading zstd library… ' + p + '%';
+      }
+    }, 100);
   } catch (e) {
-    updateZstdStatus(false, 'Failed to load zstd library: ' + e.message);
+    updateZstdStatus(false, 'Failed to load zstd library: ' + e.message, 100);
   }
 }
 
@@ -263,7 +310,7 @@ function handleMediaSelect(e) {
       }
     };
     vid.onerror = () => {
-      alert('Failed to load video file.');
+      showError('Failed to load video file.');
       URL.revokeObjectURL(url);
     };
   } else {
@@ -279,7 +326,7 @@ function handleMediaSelect(e) {
       }
     };
     img.onerror = () => {
-      alert('Failed to load image file.');
+      showError('Failed to load image file.');
       URL.revokeObjectURL(url);
     };
     img.src = url;
@@ -316,32 +363,42 @@ function drawOriginalFrame(time) {
 // ---- Core conversion ----
 
 async function generateMoveset() {
-  if (!media || !zstdReady) return;
+  if (!media || !zstdReady || isGenerating) return;
 
-  const res = parseInt(resolutionInput.value, 10);
-  const blockSize = parseInt(blockSizeInput.value, 10);
-  const gap = parseInt(gapInput.value, 10);
-  const threshold = parseInt(thresholdInput.value, 10);
-  const colorMode = colorModeInput.value;
-  const singleColor = singleColorInput.value;
-  const duration = parseFloat(durationInput.value);
-  const fps = parseInt(fpsInput.value, 10);
+  setGenerating(true);
+  hideError();
 
-  if (mediaType === 'image') {
-    blocks = sampleImageToBlocks(media, res, threshold, colorMode, singleColor, duration);
-  } else {
-    blocks = await sampleVideoToBlocks(media, res, threshold, colorMode, singleColor, duration, fps);
+  try {
+    const res = parseInt(resolutionInput.value, 10);
+    const blockSize = parseInt(blockSizeInput.value, 10);
+    const gap = parseInt(gapInput.value, 10);
+    const threshold = parseInt(thresholdInput.value, 10);
+    const colorMode = colorModeInput.value;
+    const singleColor = singleColorInput.value;
+    const duration = parseFloat(durationInput.value);
+    const fps = parseInt(fpsInput.value, 10);
+
+    if (mediaType === 'image') {
+      blocks = sampleImageToBlocks(media, res, threshold, colorMode, singleColor, duration);
+    } else {
+      blocks = await sampleVideoToBlocks(media, res, threshold, colorMode, singleColor, duration, fps);
+    }
+
+    drawBlockPreview(blocks, blockSize, gap, mediaType === 'video' ? media.duration : duration);
+    blockCountEl.textContent = `Blocks: ${blocks.length}`;
+
+    const moveset = buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration);
+
+    const json = JSON.stringify(moveset, null, 2);
+    const code = await encodeCode(moveset.slots);
+
+    output.value = exportFormat.value === 'code' ? code : json;
+  } catch (e) {
+    console.error(e);
+    showError('Generation failed: ' + e.message);
+  } finally {
+    setGenerating(false);
   }
-
-  drawBlockPreview(blocks, blockSize, gap, mediaType === 'video' ? media.duration : duration);
-  blockCountEl.textContent = `Blocks: ${blocks.length}`;
-
-  const moveset = buildMoveset(blocks, res, blockSize, gap, threshold, colorMode, singleColor, mediaType, duration);
-
-  const json = JSON.stringify(moveset, null, 2);
-  const code = await encodeCode(moveset.slots);
-
-  output.value = exportFormat.value === 'code' ? code : json;
 }
 
 function sampleImageToBlocks(image, res, threshold, colorMode, singleColor, duration) {
@@ -623,16 +680,19 @@ async function decodeExistingCode() {
   if (!code) return;
 
   if (!zstdReady) {
-    alert('zstd library not ready yet. Please wait a moment.');
+    showError('zstd library not ready yet. Please wait a moment.');
     return;
   }
 
   try {
+    setGenerating(true);
     const decoded = await decodeCode(code);
     exportFormat.value = 'json';
     output.value = JSON.stringify({ slots: decoded }, null, 2);
     output.scrollTop = 0;
   } catch (e) {
-    alert('Failed to decode code: ' + e.message);
+    showError('Failed to decode code: ' + e.message);
+  } finally {
+    setGenerating(false);
   }
 }

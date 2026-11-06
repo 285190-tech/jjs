@@ -89,6 +89,12 @@
     <div class="row" id="zstdStatus" style="margin-bottom:0.5rem;font-size:0.85rem;color:#66fcb1;">
       Loading zstd library…
     </div>
+    <div class="row" id="zstdProgressRow" style="display:none;margin-bottom:0.5rem;">
+      <div class="progress-bar">
+        <div id="zstdProgress" class="progress-fill"></div>
+      </div>
+      <span id="zstdProgressText" style="font-size:0.85rem;color:#66fcb1;">Initializing…</span>
+    </div>
     <textarea id="output" readonly placeholder="Generate a moveset to see the code here..."></textarea>
     <div class="row actions">
       <button id="copyBtn">Copy to Clipboard</button>
@@ -99,6 +105,7 @@
       <textarea id="importInput" rows="2" placeholder="Paste a JJS moveset code here..."></textarea>
       <button id="decodeBtn" style="margin-top:0.4rem;">Decode Code → JSON</button>
     </div>
+    <div class="row" id="errorMsg" style="display:none;color:#ff6b6b;font-size:0.85rem;margin-top:0.5rem;"></div>
   </section>
 </main>
 
